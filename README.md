@@ -8,7 +8,11 @@ Time & Line adds two powerful visual views to [Obsidian Bases](https://obsidian.
 
 Both views were inspired by **Aeon Timeline** and **Notion's timeline features**, attempting to implement the best of both: Aeon's deep temporal modeling (BCE dates, fuzzy date ranges, measurement tools, dependency logic) combined with Notion's clean inline property display, side tables, and drag-to-create simplicity.
 
-![Gantt chart icon](https://lucide.dev/icons/chart-gantt) Timeline View &nbsp;&nbsp;|&nbsp;&nbsp; ![Sequence icon](https://lucide.dev/icons/chart-no-axes-gantt) Sequence View
+Timeline View
+![timeline-view](https://github.com/user-attachments/assets/0e106170-0f3c-4e68-817c-26194f11a063)
+
+Sequences View
+![sequences-view](https://github.com/user-attachments/assets/f827a28f-054b-4f4d-8176-2cf5611b8e23)
 
 ---
 
