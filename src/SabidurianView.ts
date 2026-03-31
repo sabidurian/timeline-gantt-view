@@ -94,6 +94,8 @@ export class SabidurianView extends BasesView {
   /** Cached config references needed by renderVisibleBars. */
   private _showArrows = true;
   private _isGrouped = false;
+  private _startPropName = 'start-date';
+  private _endPropName = 'end-date';
 
   constructor(controller: QueryController, scrollEl: HTMLElement, plugin: SabidurianPlugin) {
     super(controller);
@@ -150,6 +152,12 @@ export class SabidurianView extends BasesView {
     const colorPropId = this.config.getAsPropertyId('colorProp');
     const earliestStartPropId = this.config.getAsPropertyId('earliestStartProp');
     const latestEndPropId = this.config.getAsPropertyId('latestEndProp');
+
+    // Derive frontmatter property names from configured Bases property IDs
+    const startPropRaw = this.config.get('startDateProp') as string | undefined;
+    const endPropRaw = this.config.get('endDateProp') as string | undefined;
+    this._startPropName = startPropRaw ? startPropRaw.replace(/^note\./, '') : 'start-date';
+    this._endPropName = endPropRaw ? endPropRaw.replace(/^note\./, '') : 'end-date';
 
     // Dependency property: view config > plugin setting > default
     const depPropRaw = this.config.get('dependencyProp') as string | undefined;
@@ -221,12 +229,14 @@ export class SabidurianView extends BasesView {
       ? (SCALES.find(s => s.id === savedScaleId) ?? autoSelectScale(range, containerWidth))
       : autoSelectScale(range, containerWidth);
 
-    // Canvas width: ensure each scale unit gets at least ~80px
-    const unitsInRange = range / this.currentScale.unitDurationYears;
-    const minCanvasWidth = Math.max(containerWidth, unitsInRange * 80);
+    // Generate columns for the selected scale (needed before canvas width calc)
+    const columns = this.currentScale.getColumnBoundaries(viewStart, viewEnd);
+
+    // Canvas width: ensure each column gets at least ~80px so switching
+    // scales always produces a visible difference in bar sizing.
+    const minCanvasWidth = Math.max(containerWidth, columns.length * 80);
     const canvasWidth = Math.max(containerWidth, minCanvasWidth);
     this.axis.setView(viewStart, viewEnd, canvasWidth);
-
     // Lock state: per-view config OR auto-lock on mobile via plugin setting
     const configLocked = this.config.get('locked') as boolean ?? false;
     const autoLock = this.plugin.settings.lockOnMobile && isTouchDevice();
@@ -234,9 +244,6 @@ export class SabidurianView extends BasesView {
 
     // Controls
     this.renderControls(sabidurianEntries.length);
-
-    // Columns
-    const columns = this.currentScale.getColumnBoundaries(viewStart, viewEnd);
 
     // ── Layout: side table + timeline in a horizontal flex container ──
     const bodyContainerEl = this.rootEl.createDiv({ cls: 'sabidurian-body-container' });
@@ -341,6 +348,7 @@ export class SabidurianView extends BasesView {
       this.rootEl,
     );
     this.barRenderer.setAxis(this.axis);
+    this.barRenderer.setDatePropNames(this._startPropName, this._endPropName);
 
     // Configure bar property badges
     const barDisplayProps: string[] = [];
@@ -356,6 +364,10 @@ export class SabidurianView extends BasesView {
       this.plugin.settings.barPropertyMinWidth,
       this.plugin.settings.showBarProperties,
     );
+
+    // Focus tag: grey out entries that don't have this tag
+    const focusTagRaw = (this.config.get('focusTag') as string | undefined)?.trim() || null;
+    this.barRenderer.setFocusTag(focusTagRaw ? focusTagRaw.replace(/^#/, '') : null);
 
     // Group headers in SVG (always fully rendered — there aren't hundreds of them)
     if (isGrouped) {
@@ -544,7 +556,7 @@ export class SabidurianView extends BasesView {
           (row) => this.layoutEngine.getRowY(row),
         );
         this.arrowDragManager.setConnectCompleteCallback(() => {
-          // Frontmatter change triggers Bases re-query → onDataUpdated
+          setTimeout(() => this.onDataUpdated(), 200);
         });
       }
     }
@@ -558,19 +570,21 @@ export class SabidurianView extends BasesView {
         this.axis,
         this.currentScale!,
       );
+      this.dragManager.setDatePropNames(this._startPropName, this._endPropName);
       this.dragManager.attachToBarGroups(
         entriesToRender,
         (row) => this.layoutEngine.getRowY(row),
       );
       this.dragManager.setDragCompleteCallback(() => {
-        // Frontmatter change triggers Bases to re-query, which calls onDataUpdated
+        // Bases may auto-refresh, but force a re-render as fallback
+        setTimeout(() => this.onDataUpdated(), 200);
       });
       this.dragManager.setCreateCallback(async (startYear, endYear) => {
         const startStr = this.yearToDateStr(startYear);
         const endStr = this.yearToDateStr(endYear);
         await this.createFileForView(undefined, (fm) => {
-          fm['start-date'] = startStr;
-          fm['end-date'] = endStr;
+          fm[this._startPropName] = startStr;
+          fm[this._endPropName] = endStr;
         });
       });
     }
@@ -595,8 +609,8 @@ export class SabidurianView extends BasesView {
       const startStr = this.yearToDateStr(startYear);
       const endStr = this.yearToDateStr(endYear);
       await this.createFileForView(undefined, (fm) => {
-        fm['start-date'] = startStr;
-        fm['end-date'] = endStr;
+        fm[this._startPropName] = startStr;
+        fm[this._endPropName] = endStr;
       });
     });
     this.contextMenuManager.setScrollToTodayCallback(() => {
@@ -607,7 +621,7 @@ export class SabidurianView extends BasesView {
       this.onDataUpdated();
     });
     this.contextMenuManager.setRefreshCallback(() => {
-      // Frontmatter changes trigger re-query automatically
+      setTimeout(() => this.onDataUpdated(), 200);
     });
 
     // ── Keyboard navigation ──
@@ -693,19 +707,20 @@ export class SabidurianView extends BasesView {
           const startDateStr = this.yearToDateStr(newStart);
           const endDateStr = this.yearToDateStr(newEnd);
           await this.plugin.app.fileManager.processFrontMatter(entry.file, (fm) => {
-            fm['start-date'] = startDateStr;
+            fm[this._startPropName] = startDateStr;
             if (!entry.isPoint) {
-              fm['end-date'] = endDateStr;
+              fm[this._endPropName] = endDateStr;
             }
           });
+          setTimeout(() => this.onDataUpdated(), 200);
         });
 
         this.touchManager.setCreateCallback(async (startYear, endYear) => {
           const startStr = this.yearToDateStr(startYear);
           const endStr = this.yearToDateStr(endYear);
           await this.createFileForView(undefined, (fm) => {
-            fm['start-date'] = startStr;
-            fm['end-date'] = endStr;
+            fm[this._startPropName] = startStr;
+            fm[this._endPropName] = endStr;
           });
         });
       }

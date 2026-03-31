@@ -48,9 +48,37 @@ export class BarRenderer {
   /** Whether property badges are globally enabled. */
   private badgesEnabled = true;
 
+  /** Tag to focus on — entries without this tag are visually greyed out. */
+  private focusTag: string | null = null;
+
   /** Set the axis for fuzzy date rendering. Call before render(). */
   setAxis(axis: NumericAxis): void {
     this.axis = axis;
+  }
+
+  /** Set date property names to exclude from tooltips. */
+  setDatePropNames(startProp: string, endProp: string): void {
+    this.tooltipExcludeExtra = new Set([startProp, endProp]);
+  }
+
+  /** Set the focus tag. Entries without this tag are greyed out. */
+  setFocusTag(tag: string | null): void {
+    this.focusTag = tag;
+  }
+
+  /** Check whether an entry's tags contain the focus tag. */
+  private entryHasFocusTag(entry: SabidurianEntry): boolean {
+    if (!this.focusTag) return true; // No focus tag set — everything is focused
+    const needle = this.focusTag.toLowerCase();
+    // Check all property values whose key looks like "tags" or "tag"
+    for (const [key, val] of Object.entries(entry.properties)) {
+      if (key.toLowerCase().includes('tag') && val) {
+        // Tags arrive as comma-separated string, e.g. "project,work,v2"
+        const tags = val.split(',').map(t => t.trim().replace(/^#/, '').toLowerCase());
+        if (tags.includes(needle)) return true;
+      }
+    }
+    return false;
   }
 
   /** Configure property badge display. Call before render(). */
@@ -80,6 +108,9 @@ export class BarRenderer {
   private renderBar(entry: SabidurianEntry, y: number): void {
     const group = document.createElementNS(SVG_NS, 'g');
     group.classList.add('sabidurian-bar-group');
+    if (this.focusTag && !this.entryHasFocusTag(entry)) {
+      group.classList.add('sabidurian-bar-unfocused');
+    }
     group.dataset.filePath = entry.file.path;
 
     // ── Fuzzy/uncertainty extensions (rendered BEFORE main bar) ──
@@ -306,6 +337,9 @@ export class BarRenderer {
   private renderPointMarker(entry: SabidurianEntry, y: number): void {
     const group = document.createElementNS(SVG_NS, 'g');
     group.classList.add('sabidurian-bar-group');
+    if (this.focusTag && !this.entryHasFocusTag(entry)) {
+      group.classList.add('sabidurian-bar-unfocused');
+    }
     group.dataset.filePath = entry.file.path;
 
     const cx = entry.x;
@@ -369,12 +403,14 @@ export class BarRenderer {
   }
 
   /** Property key prefixes to exclude from tooltip (system/file metadata). */
-  private static readonly TOOLTIP_EXCLUDE = new Set([
+  private static readonly TOOLTIP_EXCLUDE_BASE = new Set([
     'file name', 'file base name', 'file full name', 'file path',
     'file extension', 'folder', 'file size',
     'created time', 'modified time',
-    'start-date', 'end-date',
   ]);
+
+  /** Additional property keys to exclude (configured date property names). */
+  private tooltipExcludeExtra: Set<string> = new Set(['start-date', 'end-date']);
 
   /** Build tooltip content using safe DOM methods (no innerHTML). */
   private showTooltip(entry: SabidurianEntry, e: MouseEvent): void {
@@ -426,7 +462,7 @@ export class BarRenderer {
     // User-defined properties (safe: textContent only)
     for (const [key, val] of Object.entries(entry.properties)) {
       const keyLower = key.toLowerCase();
-      if (val && val !== 'null' && !BarRenderer.TOOLTIP_EXCLUDE.has(keyLower)) {
+      if (val && val !== 'null' && !BarRenderer.TOOLTIP_EXCLUDE_BASE.has(keyLower) && !this.tooltipExcludeExtra.has(keyLower)) {
         this.tooltipEl.createEl('br');
         const span = this.tooltipEl.createEl('span', { cls: 'sabidurian-tooltip-prop' });
         span.textContent = `${key}:`;

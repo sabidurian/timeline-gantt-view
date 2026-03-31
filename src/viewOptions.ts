@@ -84,6 +84,14 @@ export function getViewOptions(config: BasesViewConfig): any[] {
       options: scaleOptions,
     },
 
+    // ── Focus filter ──
+    {
+      type: 'text',
+      key: 'focusTag',
+      displayName: 'Focus tag',
+      placeholder: 'e.g. project — unfocused items are greyed out',
+    },
+
     // ── Display toggles ──
     {
       type: 'toggle',

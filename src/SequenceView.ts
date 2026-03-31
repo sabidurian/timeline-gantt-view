@@ -362,6 +362,10 @@ export class SequenceView extends BasesView {
       this.plugin.settings.showBarProperties,
     );
 
+    // Focus tag: grey out entries that don't have this tag
+    const focusTagRaw = (this.config.get('focusTag') as string | undefined)?.trim() || null;
+    this.barRenderer.setFocusTag(focusTagRaw ? focusTagRaw.replace(/^#/, '') : null);
+
     // Group headers
     if (isGrouped) {
       this.groupHeaderRenderer = new GroupHeaderRenderer(
@@ -473,7 +477,9 @@ export class SequenceView extends BasesView {
           entriesToRender,
           (row) => this.layoutEngine.getRowY(row),
         );
-        this.arrowDragManager.setConnectCompleteCallback(() => {});
+        this.arrowDragManager.setConnectCompleteCallback(() => {
+          setTimeout(() => this.onDataUpdated(), 200);
+        });
       }
     }
 
@@ -491,7 +497,7 @@ export class SequenceView extends BasesView {
         (row) => this.layoutEngine.getRowY(row),
       );
       this.dragManager.setDragCompleteCallback(() => {
-        // After frontmatter changes, Bases re-queries → onDataUpdated
+        setTimeout(() => this.onDataUpdated(), 200);
       });
 
       // Override the drag write-back for sequence reordering
@@ -549,7 +555,9 @@ export class SequenceView extends BasesView {
       });
     });
     // No scrollToToday or changeScale callbacks for sequence view
-    this.contextMenuManager.setRefreshCallback(() => {});
+    this.contextMenuManager.setRefreshCallback(() => {
+      setTimeout(() => this.onDataUpdated(), 200);
+    });
 
     // Keyboard
     this.keyboardManager = new KeyboardManager(
@@ -614,6 +622,7 @@ export class SequenceView extends BasesView {
               delete fm[this._orderEndPropName];
             }
           });
+          setTimeout(() => this.onDataUpdated(), 200);
         });
         this.touchManager.setCreateCallback(async (startPos, endPos) => {
           const orderVal = this.denseToOrder(Math.round(startPos));

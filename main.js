@@ -482,6 +482,10 @@ var _BarRenderer = class _BarRenderer {
     this.badgeMinWidth = 80;
     /** Whether property badges are globally enabled. */
     this.badgesEnabled = true;
+    /** Tag to focus on — entries without this tag are visually greyed out. */
+    this.focusTag = null;
+    /** Additional property keys to exclude (configured date property names). */
+    this.tooltipExcludeExtra = /* @__PURE__ */ new Set(["start-date", "end-date"]);
     this.app = app;
     this.svg = svg;
     this.barGroup = document.createElementNS(SVG_NS2, "g");
@@ -493,6 +497,26 @@ var _BarRenderer = class _BarRenderer {
   /** Set the axis for fuzzy date rendering. Call before render(). */
   setAxis(axis) {
     this.axis = axis;
+  }
+  /** Set date property names to exclude from tooltips. */
+  setDatePropNames(startProp, endProp) {
+    this.tooltipExcludeExtra = /* @__PURE__ */ new Set([startProp, endProp]);
+  }
+  /** Set the focus tag. Entries without this tag are greyed out. */
+  setFocusTag(tag) {
+    this.focusTag = tag;
+  }
+  /** Check whether an entry's tags contain the focus tag. */
+  entryHasFocusTag(entry) {
+    if (!this.focusTag) return true;
+    const needle = this.focusTag.toLowerCase();
+    for (const [key, val] of Object.entries(entry.properties)) {
+      if (key.toLowerCase().includes("tag") && val) {
+        const tags = val.split(",").map((t) => t.trim().replace(/^#/, "").toLowerCase());
+        if (tags.includes(needle)) return true;
+      }
+    }
+    return false;
   }
   /** Configure property badge display. Call before render(). */
   setDisplayProps(props, minWidth, enabled) {
@@ -516,6 +540,9 @@ var _BarRenderer = class _BarRenderer {
   renderBar(entry, y) {
     const group = document.createElementNS(SVG_NS2, "g");
     group.classList.add("sabidurian-bar-group");
+    if (this.focusTag && !this.entryHasFocusTag(entry)) {
+      group.classList.add("sabidurian-bar-unfocused");
+    }
     group.dataset.filePath = entry.file.path;
     if (this.axis) {
       if (entry.earliestStartYear != null && entry.earliestStartYear < entry.startYear) {
@@ -700,6 +727,9 @@ var _BarRenderer = class _BarRenderer {
   renderPointMarker(entry, y) {
     const group = document.createElementNS(SVG_NS2, "g");
     group.classList.add("sabidurian-bar-group");
+    if (this.focusTag && !this.entryHasFocusTag(entry)) {
+      group.classList.add("sabidurian-bar-unfocused");
+    }
     group.dataset.filePath = entry.file.path;
     const cx = entry.x;
     const cy = y + BAR_HEIGHT / 2;
@@ -793,7 +823,7 @@ var _BarRenderer = class _BarRenderer {
     }
     for (const [key, val] of Object.entries(entry.properties)) {
       const keyLower = key.toLowerCase();
-      if (val && val !== "null" && !_BarRenderer.TOOLTIP_EXCLUDE.has(keyLower)) {
+      if (val && val !== "null" && !_BarRenderer.TOOLTIP_EXCLUDE_BASE.has(keyLower) && !this.tooltipExcludeExtra.has(keyLower)) {
         this.tooltipEl.createEl("br");
         const span = this.tooltipEl.createEl("span", { cls: "sabidurian-tooltip-prop" });
         span.textContent = `${key}:`;
@@ -831,7 +861,7 @@ var _BarRenderer = class _BarRenderer {
   }
 };
 /** Property key prefixes to exclude from tooltip (system/file metadata). */
-_BarRenderer.TOOLTIP_EXCLUDE = /* @__PURE__ */ new Set([
+_BarRenderer.TOOLTIP_EXCLUDE_BASE = /* @__PURE__ */ new Set([
   "file name",
   "file base name",
   "file full name",
@@ -840,9 +870,7 @@ _BarRenderer.TOOLTIP_EXCLUDE = /* @__PURE__ */ new Set([
   "folder",
   "file size",
   "created time",
-  "modified time",
-  "start-date",
-  "end-date"
+  "modified time"
 ]);
 var BarRenderer = _BarRenderer;
 
@@ -1225,6 +1253,9 @@ var DragManager = class {
     this.onCreateEntry = null;
     // Undo support
     this.lastUndo = null;
+    // Configurable frontmatter property names for date write-back
+    this.startPropName = "start-date";
+    this.endPropName = "end-date";
     // Sequence mode: when set, drag writes integer order values instead of dates
     this._sequenceMode = null;
     this.onMouseMove = (e) => {
@@ -1281,6 +1312,11 @@ var DragManager = class {
     this.scale = scale;
     this.ctx.dateLabelEl = wrapperEl.createDiv({ cls: "sabidurian-drag-date-label" });
     this.ctx.dateLabelEl.style.display = "none";
+  }
+  /** Set the frontmatter property names used for date write-back. */
+  setDatePropNames(startProp, endProp) {
+    this.startPropName = startProp;
+    this.endPropName = endProp;
   }
   /**
    * Attach drag behavior to rendered bar groups.
@@ -1481,16 +1517,16 @@ var DragManager = class {
     const oldStartStr = this.yearToDateString(this.ctx.originalStartYear);
     const oldEndStr = this.yearToDateString(this.ctx.originalEndYear);
     await this.app.fileManager.processFrontMatter(entry.file, (fm) => {
-      fm["start-date"] = startDateStr;
+      fm[this.startPropName] = startDateStr;
       if (!entry.isPoint && !entry.isOngoing) {
-        fm["end-date"] = endDateStr;
+        fm[this.endPropName] = endDateStr;
       }
     });
     const undoEntries = [
-      { file: entry.file, prop: "start-date", oldVal: oldStartStr, newVal: startDateStr }
+      { file: entry.file, prop: this.startPropName, oldVal: oldStartStr, newVal: startDateStr }
     ];
     if (!entry.isPoint) {
-      undoEntries.push({ file: entry.file, prop: "end-date", oldVal: oldEndStr, newVal: endDateStr });
+      undoEntries.push({ file: entry.file, prop: this.endPropName, oldVal: oldEndStr, newVal: endDateStr });
     }
     this.lastUndo = undoEntries;
     const notice = new import_obsidian.Notice(
@@ -3768,12 +3804,14 @@ var SabidurianView = class extends import_obsidian6.BasesView {
     /** Cached config references needed by renderVisibleBars. */
     this._showArrows = true;
     this._isGrouped = false;
+    this._startPropName = "start-date";
+    this._endPropName = "end-date";
     this.scrollEl = scrollEl;
     this.plugin = plugin;
     this.renderSkeleton();
   }
   onDataUpdated() {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A;
     const prevScrollLeft = (_b = (_a = this.timelineRenderer) == null ? void 0 : _a.element.scrollLeft) != null ? _b : 0;
     const prevScrollTop = (_d = (_c = this.timelineRenderer) == null ? void 0 : _c.element.scrollTop) != null ? _d : 0;
     (_e = this.dragManager) == null ? void 0 : _e.destroy();
@@ -3814,6 +3852,10 @@ var SabidurianView = class extends import_obsidian6.BasesView {
     const colorPropId = this.config.getAsPropertyId("colorProp");
     const earliestStartPropId = this.config.getAsPropertyId("earliestStartProp");
     const latestEndPropId = this.config.getAsPropertyId("latestEndProp");
+    const startPropRaw = this.config.get("startDateProp");
+    const endPropRaw = this.config.get("endDateProp");
+    this._startPropName = startPropRaw ? startPropRaw.replace(/^note\./, "") : "start-date";
+    this._endPropName = endPropRaw ? endPropRaw.replace(/^note\./, "") : "end-date";
     const depPropRaw = this.config.get("dependencyProp");
     const depPropName = (depPropRaw == null ? void 0 : depPropRaw.trim()) || this.plugin.settings.dependencyProperty || "blocked-by";
     const enableBCE = (_s = this.config.get("enableBCE")) != null ? _s : true;
@@ -3861,15 +3903,14 @@ var SabidurianView = class extends import_obsidian6.BasesView {
     const containerWidth = this.rootEl.clientWidth || 800;
     const savedScaleId = this.config.get("scaleId");
     this.currentScale = savedScaleId && savedScaleId !== "auto" ? (_v = SCALES.find((s) => s.id === savedScaleId)) != null ? _v : autoSelectScale(range, containerWidth) : autoSelectScale(range, containerWidth);
-    const unitsInRange = range / this.currentScale.unitDurationYears;
-    const minCanvasWidth = Math.max(containerWidth, unitsInRange * 80);
+    const columns = this.currentScale.getColumnBoundaries(viewStart, viewEnd);
+    const minCanvasWidth = Math.max(containerWidth, columns.length * 80);
     const canvasWidth = Math.max(containerWidth, minCanvasWidth);
     this.axis.setView(viewStart, viewEnd, canvasWidth);
     const configLocked = (_w = this.config.get("locked")) != null ? _w : false;
     const autoLock = this.plugin.settings.lockOnMobile && isTouchDevice();
     this._locked = configLocked || autoLock;
     this.renderControls(sabidurianEntries.length);
-    const columns = this.currentScale.getColumnBoundaries(viewStart, viewEnd);
     const bodyContainerEl = this.rootEl.createDiv({ cls: "sabidurian-body-container" });
     const headerContainerEl = bodyContainerEl.createDiv({ cls: "sabidurian-header-container" });
     const isMobile = isMobileViewport();
@@ -3943,6 +3984,7 @@ var SabidurianView = class extends import_obsidian6.BasesView {
       this.rootEl
     );
     this.barRenderer.setAxis(this.axis);
+    this.barRenderer.setDatePropNames(this._startPropName, this._endPropName);
     const barDisplayProps = [];
     for (const key of ["barDisplayProp1", "barDisplayProp2", "barDisplayProp3"]) {
       const val = this.config.get(key);
@@ -3955,6 +3997,8 @@ var SabidurianView = class extends import_obsidian6.BasesView {
       this.plugin.settings.barPropertyMinWidth,
       this.plugin.settings.showBarProperties
     );
+    const focusTagRaw = ((_A = this.config.get("focusTag")) == null ? void 0 : _A.trim()) || null;
+    this.barRenderer.setFocusTag(focusTagRaw ? focusTagRaw.replace(/^#/, "") : null);
     if (isGrouped) {
       this.groupHeaderRenderer = new GroupHeaderRenderer(
         this.timelineRenderer.svgElement
@@ -4102,6 +4146,7 @@ var SabidurianView = class extends import_obsidian6.BasesView {
           (row) => this.layoutEngine.getRowY(row)
         );
         this.arrowDragManager.setConnectCompleteCallback(() => {
+          setTimeout(() => this.onDataUpdated(), 200);
         });
       }
     }
@@ -4113,18 +4158,20 @@ var SabidurianView = class extends import_obsidian6.BasesView {
         this.axis,
         this.currentScale
       );
+      this.dragManager.setDatePropNames(this._startPropName, this._endPropName);
       this.dragManager.attachToBarGroups(
         entriesToRender,
         (row) => this.layoutEngine.getRowY(row)
       );
       this.dragManager.setDragCompleteCallback(() => {
+        setTimeout(() => this.onDataUpdated(), 200);
       });
       this.dragManager.setCreateCallback(async (startYear, endYear) => {
         const startStr = this.yearToDateStr(startYear);
         const endStr = this.yearToDateStr(endYear);
         await this.createFileForView(void 0, (fm) => {
-          fm["start-date"] = startStr;
-          fm["end-date"] = endStr;
+          fm[this._startPropName] = startStr;
+          fm[this._endPropName] = endStr;
         });
       });
     }
@@ -4145,8 +4192,8 @@ var SabidurianView = class extends import_obsidian6.BasesView {
       const startStr = this.yearToDateStr(startYear);
       const endStr = this.yearToDateStr(endYear);
       await this.createFileForView(void 0, (fm) => {
-        fm["start-date"] = startStr;
-        fm["end-date"] = endStr;
+        fm[this._startPropName] = startStr;
+        fm[this._endPropName] = endStr;
       });
     });
     this.contextMenuManager.setScrollToTodayCallback(() => {
@@ -4157,6 +4204,7 @@ var SabidurianView = class extends import_obsidian6.BasesView {
       this.onDataUpdated();
     });
     this.contextMenuManager.setRefreshCallback(() => {
+      setTimeout(() => this.onDataUpdated(), 200);
     });
     this.keyboardManager = new KeyboardManager(
       this.rootEl,
@@ -4238,18 +4286,19 @@ var SabidurianView = class extends import_obsidian6.BasesView {
           const startDateStr = this.yearToDateStr(newStart);
           const endDateStr = this.yearToDateStr(newEnd);
           await this.plugin.app.fileManager.processFrontMatter(entry.file, (fm) => {
-            fm["start-date"] = startDateStr;
+            fm[this._startPropName] = startDateStr;
             if (!entry.isPoint) {
-              fm["end-date"] = endDateStr;
+              fm[this._endPropName] = endDateStr;
             }
           });
+          setTimeout(() => this.onDataUpdated(), 200);
         });
         this.touchManager.setCreateCallback(async (startYear, endYear) => {
           const startStr = this.yearToDateStr(startYear);
           const endStr = this.yearToDateStr(endYear);
           await this.createFileForView(void 0, (fm) => {
-            fm["start-date"] = startStr;
-            fm["end-date"] = endStr;
+            fm[this._startPropName] = startStr;
+            fm[this._endPropName] = endStr;
           });
         });
       }
@@ -4741,7 +4790,7 @@ var SequenceView = class extends import_obsidian7.BasesView {
     this.renderSkeleton();
   }
   onDataUpdated() {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
     const prevScrollLeft = (_b = (_a = this.timelineRenderer) == null ? void 0 : _a.element.scrollLeft) != null ? _b : 0;
     const prevScrollTop = (_d = (_c = this.timelineRenderer) == null ? void 0 : _c.element.scrollTop) != null ? _d : 0;
     this.destroyManagers();
@@ -4943,6 +4992,8 @@ var SequenceView = class extends import_obsidian7.BasesView {
       this.plugin.settings.barPropertyMinWidth,
       this.plugin.settings.showBarProperties
     );
+    const focusTagRaw = ((_m = this.config.get("focusTag")) == null ? void 0 : _m.trim()) || null;
+    this.barRenderer.setFocusTag(focusTagRaw ? focusTagRaw.replace(/^#/, "") : null);
     if (isGrouped) {
       this.groupHeaderRenderer = new GroupHeaderRenderer(
         this.timelineRenderer.svgElement
@@ -5042,6 +5093,7 @@ var SequenceView = class extends import_obsidian7.BasesView {
           (row) => this.layoutEngine.getRowY(row)
         );
         this.arrowDragManager.setConnectCompleteCallback(() => {
+          setTimeout(() => this.onDataUpdated(), 200);
         });
       }
     }
@@ -5058,6 +5110,7 @@ var SequenceView = class extends import_obsidian7.BasesView {
         (row) => this.layoutEngine.getRowY(row)
       );
       this.dragManager.setDragCompleteCallback(() => {
+        setTimeout(() => this.onDataUpdated(), 200);
       });
       this.dragManager.setSequenceMode({
         orderPropName: this._orderPropName,
@@ -5105,6 +5158,7 @@ var SequenceView = class extends import_obsidian7.BasesView {
       });
     });
     this.contextMenuManager.setRefreshCallback(() => {
+      setTimeout(() => this.onDataUpdated(), 200);
     });
     this.keyboardManager = new KeyboardManager(
       this.rootEl,
@@ -5167,6 +5221,7 @@ var SequenceView = class extends import_obsidian7.BasesView {
               delete fm[this._orderEndPropName];
             }
           });
+          setTimeout(() => this.onDataUpdated(), 200);
         });
         this.touchManager.setCreateCallback(async (startPos, endPos) => {
           const orderVal = this.denseToOrder(Math.round(startPos));
@@ -5497,6 +5552,13 @@ function getViewOptions(config) {
       default: "auto",
       options: scaleOptions
     },
+    // ── Focus filter ──
+    {
+      type: "text",
+      key: "focusTag",
+      displayName: "Focus tag",
+      placeholder: "e.g. project \u2014 unfocused items are greyed out"
+    },
     // ── Display toggles ──
     {
       type: "toggle",
@@ -5578,6 +5640,13 @@ function getSequenceViewOptions(config) {
       key: "barDisplayProp3",
       displayName: "Bar property 3",
       placeholder: "Third property on bars"
+    },
+    // ── Focus filter ──
+    {
+      type: "text",
+      key: "focusTag",
+      displayName: "Focus tag",
+      placeholder: "e.g. project \u2014 unfocused items are greyed out"
     },
     // ── Display toggles ──
     {

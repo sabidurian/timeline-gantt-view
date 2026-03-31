@@ -971,6 +971,12 @@ body:not(.sabidurian-today-pulse) .sabidurian-today-line {
   color: var(--text-on-accent, #fff);
 }
 
+/* ── Focus tag: unfocused items ── */
+.sabidurian-bar-unfocused {
+  filter: grayscale(100%);
+  opacity: 0.92;
+}
+
 /* ── Calendar markers ── */
 .sabidurian-marker-line {
   stroke-width: 1.5;

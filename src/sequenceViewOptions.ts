@@ -54,6 +54,14 @@ export function getSequenceViewOptions(config: BasesViewConfig): any[] {
       placeholder: 'Third property on bars',
     },
 
+    // ── Focus filter ──
+    {
+      type: 'text',
+      key: 'focusTag',
+      displayName: 'Focus tag',
+      placeholder: 'e.g. project — unfocused items are greyed out',
+    },
+
     // ── Display toggles ──
     {
       type: 'toggle',

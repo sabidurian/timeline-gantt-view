@@ -1,7 +1,7 @@
 {
   "name": "timeline-gantt-view",
   "version": "1.0.0",
-  "description": "A Gantt Chart / Timeline View for Obsidian Bases.",
+  "description": "A Set of Gantt Chart / Timeline Views for Obsidian Bases.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",

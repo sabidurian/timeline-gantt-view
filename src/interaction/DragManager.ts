@@ -60,6 +60,10 @@ export class DragManager {
   // Undo support
   private lastUndo: { file: TFile; prop: string; oldVal: string | number; newVal: string | number }[] | null = null;
 
+  // Configurable frontmatter property names for date write-back
+  private startPropName = 'start-date';
+  private endPropName = 'end-date';
+
   // Sequence mode: when set, drag writes integer order values instead of dates
   private _sequenceMode: {
     orderPropName: string;
@@ -85,6 +89,12 @@ export class DragManager {
     // Create floating date label
     this.ctx.dateLabelEl = wrapperEl.createDiv({ cls: 'sabidurian-drag-date-label' });
     this.ctx.dateLabelEl.style.display = 'none';
+  }
+
+  /** Set the frontmatter property names used for date write-back. */
+  setDatePropNames(startProp: string, endProp: string): void {
+    this.startPropName = startProp;
+    this.endPropName = endProp;
   }
 
   /**
@@ -410,21 +420,20 @@ export class DragManager {
     const oldStartStr = this.yearToDateString(this.ctx.originalStartYear);
     const oldEndStr = this.yearToDateString(this.ctx.originalEndYear);
 
-    // Write back to frontmatter
+    // Write back to frontmatter using configured property names
     await this.app.fileManager.processFrontMatter(entry.file, (fm) => {
-      fm['start-date'] = startDateStr;
+      fm[this.startPropName] = startDateStr;
       if (!entry.isPoint && !entry.isOngoing) {
-        fm['end-date'] = endDateStr;
+        fm[this.endPropName] = endDateStr;
       }
-      // Ongoing bars: never write end-date (preserves ongoing state)
     });
 
     // Undo support
     const undoEntries: typeof this.lastUndo & object = [
-      { file: entry.file, prop: 'start-date', oldVal: oldStartStr, newVal: startDateStr },
+      { file: entry.file, prop: this.startPropName, oldVal: oldStartStr, newVal: startDateStr },
     ];
     if (!entry.isPoint) {
-      undoEntries.push({ file: entry.file, prop: 'end-date', oldVal: oldEndStr, newVal: endDateStr });
+      undoEntries.push({ file: entry.file, prop: this.endPropName, oldVal: oldEndStr, newVal: endDateStr });
     }
     this.lastUndo = undoEntries;
 

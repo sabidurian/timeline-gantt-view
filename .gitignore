@@ -1,6 +1,7 @@
 # build output
 *.map
 dist/
+release-manifests/
 
 # dependencies
 node_modules/
