@@ -331,3 +331,37 @@ The following features are planned but not yet implemented:
 
 ---
 
+
+## Installation (Beta)
+
+This plugin is currently in beta and not yet available in the Obsidian Community Plugin Browser.
+
+To install via [BRAT](https://github.com/TfTHacker/obsidian42-brat):
+
+1. Install the BRAT plugin from Obsidian's Community Plugins browser
+   (Settings → Community Plugins → Browse → search "BRAT").
+2. Enable BRAT in your Community Plugins list.
+3. Open the command palette (Cmd/Ctrl + P) and run:
+   **BRAT: Add a beta plugin for testing**
+4. Paste this repository URL: `https://github.com/sabidurian/timeline-gantt-view`
+5. Click **Add Plugin**.
+6. Enable the plugin in Settings → Community Plugins.
+
+### Updating
+
+BRAT checks for updates automatically. You can also manually check:
+- Open BRAT settings and click the refresh icon next to the plugin name, or
+- Run the command **BRAT: Check for updates to all beta plugins and themes**.
+
+### Reporting Issues
+
+Please report bugs and feedback via
+[GitHub Issues](https://github.com/sabidurian/timeline-gantt-view/issues).
+Include your Obsidian version, OS, and steps to reproduce.
+
+### ⚠️ Beta Notice
+
+This plugin is under active development. Back up your vault before installing.
+Beta plugins may cause unexpected behavior. If you encounter problems,
+you can remove the plugin by clicking the X next to it in BRAT's settings,
+or by disabling it in Community Plugins.
