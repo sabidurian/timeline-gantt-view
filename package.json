@@ -1,7 +1,7 @@
 {
   "name": "sabidurian-timeline",
   "version": "1.0.0",
-  "description": "A set of Gantt Chart / Timeline Views for Obsidian Bases.",
+  "description": "A Gantt Chart / Timeline View for Obsidian Bases.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
