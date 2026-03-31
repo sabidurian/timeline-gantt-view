@@ -3,7 +3,7 @@
   "name": "Time & Line",
   "version": "1.0.0",
   "minAppVersion": "1.10.0",
-  "description": "A Gantt Chart / Timeline View for Obsidian Bases.",
+  "description": "A Set of Gantt Chart / Timeline Views for Obsidian Bases.",
   "author": "Sabidurian",
   "authorUrl": "https://sabidurian.com",
   "isDesktopOnly": false

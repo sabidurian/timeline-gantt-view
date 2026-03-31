@@ -140,6 +140,15 @@ export class ContextMenuManager {
         }),
     );
 
+    // Open to the right
+    menu.addItem((item) =>
+      item.setTitle('Open to the right')
+        .setIcon('separator-vertical')
+        .onClick(() => {
+          this.app.workspace.getLeaf('split', 'vertical').openFile(entry.file);
+        }),
+    );
+
     menu.addSeparator();
 
     // Edit dates
