@@ -115,6 +115,10 @@ export class SequenceView extends BasesView {
     // Clean up
     this.destroyManagers();
     if (this.rootEl) this.rootEl.remove();
+    // Defensive cleanup for stale siblings (see SabidurianView for context).
+    this.scrollEl
+      .querySelectorAll(':scope > .sabidurian-container')
+      .forEach((el) => el.remove());
     this.rootEl = this.scrollEl.createDiv({ cls: 'sabidurian-container sabidurian-sequence-container' });
 
     const entries = this.data?.data ?? [];
@@ -883,6 +887,9 @@ export class SequenceView extends BasesView {
   }
 
   private renderSkeleton(): void {
+    this.scrollEl
+      .querySelectorAll(':scope > .sabidurian-container')
+      .forEach((el) => el.remove());
     this.rootEl = this.scrollEl.createDiv({ cls: 'sabidurian-container sabidurian-sequence-container' });
     const skeleton = this.rootEl.createDiv({ cls: 'sabidurian-skeleton' });
     const widths = [65, 40, 80, 55, 45];

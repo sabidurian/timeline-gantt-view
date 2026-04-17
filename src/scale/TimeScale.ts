@@ -25,6 +25,18 @@ export interface TimeScale {
   supportsSubYear: boolean;
   /** Whether this scale supports BCE dates. */
   supportsBCE: boolean;
+  /**
+   * Optional minimum pixel width per column for canvas sizing. Scales with
+   * many narrow columns (hour, day) should set this to a smaller value
+   * (e.g. 24-30) to avoid absurdly wide canvases. Defaults to 80.
+   */
+  minColumnPx?: number;
+  /**
+   * Optional write precision. When a user drags at this scale, frontmatter
+   * writes will be emitted with at least this precision (unless the
+   * original value had a coarser precision — see DragManager).
+   */
+  writePrecision?: 'year' | 'month' | 'day' | 'hour' | 'minute';
   /** Generate column boundaries for the given year range. */
   getColumnBoundaries(start: number, end: number): ColumnBoundary[];
   /** Snap a fractional year to the nearest unit boundary. */

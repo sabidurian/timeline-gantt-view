@@ -84,6 +84,19 @@ export function getViewOptions(config: BasesViewConfig): any[] {
       options: scaleOptions,
     },
 
+    // ── Initial scroll position (on view open) ──
+    {
+      type: 'dropdown',
+      key: 'initialScroll',
+      displayName: 'Open view at',
+      default: 'today',
+      options: {
+        today: 'Today',
+        start: 'Start of data',
+        end: 'End of data',
+      },
+    },
+
     // ── Focus filter ──
     {
       type: 'text',

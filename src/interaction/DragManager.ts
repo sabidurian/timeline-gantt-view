@@ -12,7 +12,15 @@ import { Notice } from 'obsidian';
 import type { SabidurianEntry } from '../model/SabidurianEntry';
 import { NumericAxis } from '../scale/NumericAxis';
 import { TimeScale } from '../scale/TimeScale';
-import { sabidurianDateToYear, formatSabidurianDate, type SabidurianDate } from '../utils/dateUtils';
+import {
+  sabidurianDateToYear,
+  formatSabidurianDate,
+  getDatePrecision,
+  maxPrecision,
+  yearToYAMLString,
+  type SabidurianDate,
+  type DatePrecision,
+} from '../utils/dateUtils';
 import { BAR_HEIGHT } from '../model/LayoutEngine';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -415,10 +423,12 @@ export class DragManager {
     }
 
     // ── Timeline mode: write date strings ──
-    const startDateStr = this.yearToDateString(newStart);
-    const endDateStr = this.yearToDateString(newEnd);
-    const oldStartStr = this.yearToDateString(this.ctx.originalStartYear);
-    const oldEndStr = this.yearToDateString(this.ctx.originalEndYear);
+    const startPrecision = this.precisionForEntry(entry, 'start');
+    const endPrecision = this.precisionForEntry(entry, 'end');
+    const startDateStr = this.yearToDateString(newStart, startPrecision);
+    const endDateStr = this.yearToDateString(newEnd, endPrecision);
+    const oldStartStr = this.yearToDateString(this.ctx.originalStartYear, startPrecision);
+    const oldEndStr = this.yearToDateString(this.ctx.originalEndYear, endPrecision);
 
     // Write back to frontmatter using configured property names
     await this.app.fileManager.processFrontMatter(entry.file, (fm) => {
@@ -451,9 +461,6 @@ export class DragManager {
     const newEnd = (this.ctx as any)._newEnd as number;
 
     if (Math.abs(newEnd - newStart) < MIN_BAR_YEARS) return; // Too small
-
-    const startDateStr = this.yearToDateString(newStart);
-    const endDateStr = this.yearToDateString(newEnd);
 
     this.onCreateEntry?.(newStart, newEnd);
   }
@@ -495,8 +502,11 @@ export class DragManager {
       startStr = String(d2s ? (d2s[rawS - 1] ?? rawS) : rawS);
       endStr = rawE != null ? String(d2s ? (d2s[rawE - 1] ?? rawE) : rawE) : '';
     } else {
-      startStr = String(this.yearToDateString(newStart));
-      endStr = newEnd != null ? String(this.yearToDateString(newEnd)) : '';
+      const entry = this.ctx.entry;
+      const sp = entry ? this.precisionForEntry(entry, 'start') : this.scaleWritePrecision();
+      const ep = entry ? this.precisionForEntry(entry, 'end') : this.scaleWritePrecision();
+      startStr = String(this.yearToDateString(newStart, sp));
+      endStr = newEnd != null ? String(this.yearToDateString(newEnd, ep)) : '';
     }
 
     this.ctx.dateLabelEl.setText(endStr ? `${startStr} → ${endStr}` : startStr);
@@ -516,26 +526,36 @@ export class DragManager {
   }
 
   /**
-   * Convert a fractional year back to a YAML-friendly date string.
-   * Tries to produce the same precision as the source data.
+   * Convert a fractional year back to a YAML-friendly date string at the
+   * given precision. Precision defaults to 'day' (legacy behavior).
    */
-  private yearToDateString(fractionalYear: number): string | number {
-    if (fractionalYear < 1) {
-      // BCE: return plain number so YAML writes e.g. -500 (not '"-500"')
-      return Math.round(fractionalYear);
-    }
-    const year = Math.floor(fractionalYear);
-    const frac = fractionalYear - year;
-    const yStr = String(year).padStart(4, '0');
-    if (frac < 0.001) return yStr;
+  private yearToDateString(
+    fractionalYear: number,
+    precision: DatePrecision = 'day',
+  ): string | number {
+    return yearToYAMLString(fractionalYear, precision);
+  }
 
-    // Convert fractional year to month/day
-    // Use Date.UTC + setUTCFullYear to avoid JS treating years 0-99 as 1900-1999
-    const dayOfYear = Math.round(frac * 365);
-    const date = new Date(Date.UTC(2000, 0, 1 + dayOfYear));
-    const m = String(date.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(date.getUTCDate()).padStart(2, '0');
-    return `${yStr}-${m}-${d}`;
+  /** Return the scale's native write precision, defaulting to 'day'. */
+  private scaleWritePrecision(): DatePrecision {
+    return this.scale.writePrecision ?? 'day';
+  }
+
+  /**
+   * Decide the precision at which to write an entry's start/end date.
+   *
+   * Uses the finer of:
+   *   - the original date's precision (so datetime inputs round-trip as datetime)
+   *   - the current scale's write precision (so hour-scale drags can gain minute
+   *     precision on date-only entries)
+   */
+  private precisionForEntry(
+    entry: SabidurianEntry,
+    which: 'start' | 'end',
+  ): DatePrecision {
+    const date: SabidurianDate | null | undefined = which === 'start' ? entry.start : entry.end;
+    const origPrecision: DatePrecision = date ? getDatePrecision(date) : 'day';
+    return maxPrecision(origPrecision, this.scaleWritePrecision());
   }
 
   /** Set callback for when a drag operation completes (triggers re-render). */

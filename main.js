@@ -349,6 +349,23 @@ var LayoutEngine = class {
 };
 
 // src/utils/dateUtils.ts
+var PRECISION_ORDER = {
+  year: 0,
+  month: 1,
+  day: 2,
+  hour: 3,
+  minute: 4
+};
+function getDatePrecision(cd) {
+  if (cd.minute != null) return "minute";
+  if (cd.hour != null) return "hour";
+  if (cd.day != null) return "day";
+  if (cd.month != null) return "month";
+  return "year";
+}
+function maxPrecision(a, b) {
+  return PRECISION_ORDER[a] >= PRECISION_ORDER[b] ? a : b;
+}
 function parseSabidurianDate(value) {
   if (value == null) return null;
   if (typeof value === "number") {
@@ -358,12 +375,20 @@ function parseSabidurianDate(value) {
   if (value instanceof Date) {
     if (isNaN(value.getTime())) return null;
     const y = value.getUTCFullYear();
-    return {
+    const h = value.getUTCHours();
+    const min = value.getUTCMinutes();
+    const hasTime = h !== 0 || min !== 0 || value.getUTCSeconds() !== 0;
+    const result = {
       year: y,
       month: value.getUTCMonth(),
       day: value.getUTCDate(),
       isHistorical: y < 1
     };
+    if (hasTime) {
+      result.hour = h;
+      if (min !== 0) result.minute = min;
+    }
+    return result;
   }
   const raw = typeof value === "object" && value !== null && "toString" in value ? value.toString() : String(value);
   if (!raw || raw === "null" || raw === "undefined") return null;
@@ -377,16 +402,20 @@ function parseSabidurianDate(value) {
     const y = -parseInt(negMatch[1], 10);
     return { year: y, isHistorical: true };
   }
-  const isoTimeMatch = raw.match(/^(\d{1,4})-(\d{2})-(\d{2})T(\d{2})/);
+  const isoTimeMatch = raw.match(/^(\d{1,4})-(\d{2})-(\d{2})[T ](\d{2})(?::(\d{2}))?(?::(\d{2}))?/);
   if (isoTimeMatch) {
     const y = parseInt(isoTimeMatch[1], 10);
-    return {
+    const result = {
       year: y,
       month: parseInt(isoTimeMatch[2], 10) - 1,
       day: parseInt(isoTimeMatch[3], 10),
       hour: parseInt(isoTimeMatch[4], 10),
       isHistorical: false
     };
+    if (isoTimeMatch[5] != null) {
+      result.minute = parseInt(isoTimeMatch[5], 10);
+    }
+    return result;
   }
   const isoDateMatch = raw.match(/^(\d{1,4})-(\d{2})-(\d{2})$/);
   if (isoDateMatch) {
@@ -414,14 +443,29 @@ function parseSabidurianDate(value) {
   }
   return null;
 }
+function ymdToUtcMs(year, month, day, hour = 0, minute = 0) {
+  if (year >= 100) {
+    return Date.UTC(year, month, day, hour, minute);
+  }
+  const d = new Date(Date.UTC(2e3, month, day, hour, minute));
+  d.setUTCFullYear(year);
+  return d.getTime();
+}
 function sabidurianDateToYear(cd) {
+  var _a, _b, _c;
   if (cd.isHistorical || cd.month == null) {
     return cd.year;
   }
-  const monthFrac = cd.month / 12;
-  const dayFrac = cd.day != null ? (cd.day - 1) / 365 : 0;
-  const hourFrac = cd.hour != null ? cd.hour / 8760 : 0;
-  return cd.year + monthFrac + dayFrac + hourFrac;
+  const startMs = ymdToUtcMs(cd.year, 0, 1);
+  const endMs = ymdToUtcMs(cd.year + 1, 0, 1);
+  const valMs = ymdToUtcMs(
+    cd.year,
+    cd.month,
+    (_a = cd.day) != null ? _a : 1,
+    (_b = cd.hour) != null ? _b : 0,
+    (_c = cd.minute) != null ? _c : 0
+  );
+  return cd.year + (valMs - startMs) / (endMs - startMs);
 }
 function formatYear(year) {
   if (year <= 0) {
@@ -433,6 +477,7 @@ function formatYear(year) {
   return `${year}`;
 }
 function formatSabidurianDate(cd) {
+  var _a;
   if (cd.isHistorical) {
     return formatYear(cd.year);
   }
@@ -457,9 +502,42 @@ function formatSabidurianDate(cd) {
     return `${monthNames[cd.month]} ${cd.year}`;
   }
   if (cd.hour != null) {
-    return `${monthNames[cd.month]} ${cd.day}, ${cd.year} ${cd.hour}:00`;
+    const hh = String(cd.hour).padStart(2, "0");
+    const mm = String((_a = cd.minute) != null ? _a : 0).padStart(2, "0");
+    return `${monthNames[cd.month]} ${cd.day}, ${cd.year} ${hh}:${mm}`;
   }
   return `${monthNames[cd.month]} ${cd.day}, ${cd.year}`;
+}
+function yearToYAMLString(fractionalYear, precision = "day") {
+  if (fractionalYear < 1) {
+    return Math.round(fractionalYear);
+  }
+  const year = Math.floor(fractionalYear);
+  const frac = fractionalYear - year;
+  if (precision === "year") return String(year).padStart(4, "0");
+  const startMs = ymdToUtcMs(year, 0, 1);
+  const endMs = ymdToUtcMs(year + 1, 0, 1);
+  let targetMs = startMs + frac * (endMs - startMs);
+  if (precision === "hour") {
+    const HOUR_MS = 60 * 60 * 1e3;
+    targetMs = Math.round(targetMs / HOUR_MS) * HOUR_MS;
+  } else if (precision === "minute") {
+    const QH_MS = 15 * 60 * 1e3;
+    targetMs = Math.round(targetMs / QH_MS) * QH_MS;
+  } else if (precision === "day") {
+    const DAY_MS = 24 * 60 * 60 * 1e3;
+    targetMs = Math.round(targetMs / DAY_MS) * DAY_MS;
+  }
+  const d = new Date(targetMs);
+  const yr = d.getUTCFullYear();
+  const yStr = String(yr).padStart(4, "0");
+  const mStr = String(d.getUTCMonth() + 1).padStart(2, "0");
+  if (precision === "month") return `${yStr}-${mStr}`;
+  const dStr = String(d.getUTCDate()).padStart(2, "0");
+  if (precision === "day") return `${yStr}-${mStr}-${dStr}`;
+  const hStr = String(d.getUTCHours()).padStart(2, "0");
+  const minStr = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${yStr}-${mStr}-${dStr}T${hStr}:${minStr}`;
 }
 
 // src/renderer/BarRenderer.ts
@@ -1512,10 +1590,12 @@ var DragManager = class {
       (_c = this.onDragComplete) == null ? void 0 : _c.call(this);
       return;
     }
-    const startDateStr = this.yearToDateString(newStart);
-    const endDateStr = this.yearToDateString(newEnd);
-    const oldStartStr = this.yearToDateString(this.ctx.originalStartYear);
-    const oldEndStr = this.yearToDateString(this.ctx.originalEndYear);
+    const startPrecision = this.precisionForEntry(entry, "start");
+    const endPrecision = this.precisionForEntry(entry, "end");
+    const startDateStr = this.yearToDateString(newStart, startPrecision);
+    const endDateStr = this.yearToDateString(newEnd, endPrecision);
+    const oldStartStr = this.yearToDateString(this.ctx.originalStartYear, startPrecision);
+    const oldEndStr = this.yearToDateString(this.ctx.originalEndYear, endPrecision);
     await this.app.fileManager.processFrontMatter(entry.file, (fm) => {
       fm[this.startPropName] = startDateStr;
       if (!entry.isPoint && !entry.isOngoing) {
@@ -1540,8 +1620,6 @@ var DragManager = class {
     const newStart = this.ctx._newStart;
     const newEnd = this.ctx._newEnd;
     if (Math.abs(newEnd - newStart) < MIN_BAR_YEARS) return;
-    const startDateStr = this.yearToDateString(newStart);
-    const endDateStr = this.yearToDateString(newEnd);
     (_a = this.onCreateEntry) == null ? void 0 : _a.call(this, newStart, newEnd);
   }
   createGhost(x, y, width) {
@@ -1577,8 +1655,11 @@ var DragManager = class {
       startStr = String(d2s ? (_a = d2s[rawS - 1]) != null ? _a : rawS : rawS);
       endStr = rawE != null ? String(d2s ? (_b = d2s[rawE - 1]) != null ? _b : rawE : rawE) : "";
     } else {
-      startStr = String(this.yearToDateString(newStart));
-      endStr = newEnd != null ? String(this.yearToDateString(newEnd)) : "";
+      const entry = this.ctx.entry;
+      const sp = entry ? this.precisionForEntry(entry, "start") : this.scaleWritePrecision();
+      const ep = entry ? this.precisionForEntry(entry, "end") : this.scaleWritePrecision();
+      startStr = String(this.yearToDateString(newStart, sp));
+      endStr = newEnd != null ? String(this.yearToDateString(newEnd, ep)) : "";
     }
     this.ctx.dateLabelEl.setText(endStr ? `${startStr} \u2192 ${endStr}` : startStr);
     this.ctx.dateLabelEl.style.display = "block";
@@ -1595,22 +1676,29 @@ var DragManager = class {
     document.body.classList.remove("sabidurian-dragging");
   }
   /**
-   * Convert a fractional year back to a YAML-friendly date string.
-   * Tries to produce the same precision as the source data.
+   * Convert a fractional year back to a YAML-friendly date string at the
+   * given precision. Precision defaults to 'day' (legacy behavior).
    */
-  yearToDateString(fractionalYear) {
-    if (fractionalYear < 1) {
-      return Math.round(fractionalYear);
-    }
-    const year = Math.floor(fractionalYear);
-    const frac = fractionalYear - year;
-    const yStr = String(year).padStart(4, "0");
-    if (frac < 1e-3) return yStr;
-    const dayOfYear = Math.round(frac * 365);
-    const date = new Date(Date.UTC(2e3, 0, 1 + dayOfYear));
-    const m = String(date.getUTCMonth() + 1).padStart(2, "0");
-    const d = String(date.getUTCDate()).padStart(2, "0");
-    return `${yStr}-${m}-${d}`;
+  yearToDateString(fractionalYear, precision = "day") {
+    return yearToYAMLString(fractionalYear, precision);
+  }
+  /** Return the scale's native write precision, defaulting to 'day'. */
+  scaleWritePrecision() {
+    var _a;
+    return (_a = this.scale.writePrecision) != null ? _a : "day";
+  }
+  /**
+   * Decide the precision at which to write an entry's start/end date.
+   *
+   * Uses the finer of:
+   *   - the original date's precision (so datetime inputs round-trip as datetime)
+   *   - the current scale's write precision (so hour-scale drags can gain minute
+   *     precision on date-only entries)
+   */
+  precisionForEntry(entry, which) {
+    const date = which === "start" ? entry.start : entry.end;
+    const origPrecision = date ? getDatePrecision(date) : "day";
+    return maxPrecision(origPrecision, this.scaleWritePrecision());
   }
   /** Set callback for when a drag operation completes (triggers re-render). */
   setDragCompleteCallback(cb) {
@@ -3033,24 +3121,27 @@ var TouchManager = class {
     const newStart = this.ctx._newStart;
     const newEnd = this.ctx._newEnd;
     if (newStart == null) return;
-    const startStr = this.yearToDateString(newStart);
-    const endStr = newEnd != null ? this.yearToDateString(newEnd) : "";
+    const entry = this.ctx.entry;
+    const sp = entry ? this.precisionForEntry(entry, "start") : this.scaleWritePrecision();
+    const ep = entry ? this.precisionForEntry(entry, "end") : this.scaleWritePrecision();
+    const startStr = this.yearToDateString(newStart, sp);
+    const endStr = newEnd != null ? this.yearToDateString(newEnd, ep) : "";
     this.ctx.dateLabelEl.setText(endStr ? `${startStr} \u2192 ${endStr}` : startStr);
     this.ctx.dateLabelEl.style.display = "block";
     this.ctx.dateLabelEl.style.left = `${touch.clientX - 40}px`;
     this.ctx.dateLabelEl.style.top = `${touch.clientY - 50}px`;
   }
-  yearToDateString(fractionalYear) {
-    if (fractionalYear < 1) return `${Math.round(fractionalYear)}`;
-    const year = Math.floor(fractionalYear);
-    const frac = fractionalYear - year;
-    const yStr = String(year).padStart(4, "0");
-    if (frac < 1e-3) return yStr;
-    const dayOfYear = Math.round(frac * 365);
-    const date = new Date(Date.UTC(2e3, 0, 1 + dayOfYear));
-    const m = String(date.getUTCMonth() + 1).padStart(2, "0");
-    const d = String(date.getUTCDate()).padStart(2, "0");
-    return `${yStr}-${m}-${d}`;
+  yearToDateString(fractionalYear, precision = "day") {
+    return String(yearToYAMLString(fractionalYear, precision));
+  }
+  scaleWritePrecision() {
+    var _a;
+    return (_a = this.scale.writePrecision) != null ? _a : "day";
+  }
+  precisionForEntry(entry, which) {
+    const date = which === "start" ? entry.start : entry.end;
+    const origPrecision = date ? getDatePrecision(date) : "day";
+    return maxPrecision(origPrecision, this.scaleWritePrecision());
   }
   freshContext() {
     return {
@@ -3397,42 +3488,62 @@ var MarkerRenderer = class {
   }
 };
 
-// src/scale/scales/HourScale.ts
+// src/scale/scales/DayScale.ts
 var HOUR_IN_YEARS = 1 / 8760;
-var HourScale = {
-  id: "hour",
-  label: "Hour",
+var MINUTE_IN_MS = 60 * 1e3;
+function pickStepMinutes(rangeYears) {
+  const rangeHours = rangeYears * 8760;
+  if (rangeHours <= 12) return 15;
+  if (rangeHours <= 48) return 30;
+  if (rangeHours <= 7 * 24) return 60;
+  return 180;
+}
+var DayScale = {
+  id: "day",
+  label: "Day",
   unitDurationYears: HOUR_IN_YEARS,
   supportsSubYear: true,
   supportsBCE: false,
+  minColumnPx: 26,
+  writePrecision: "minute",
   getColumnBoundaries(start, end) {
     const cols = [];
+    const stepMin = pickStepMinutes(Math.max(end - start, 1e-5));
+    const stepMs = stepMin * MINUTE_IN_MS;
     const startDate = fractionalYearToDate(start);
-    startDate.setMinutes(0, 0, 0);
+    startDate.setSeconds(0, 0);
+    startDate.setMinutes(Math.floor(startDate.getMinutes() / stepMin) * stepMin);
     const endDate = fractionalYearToDate(end);
     let cur = new Date(startDate);
-    while (cur <= endDate && cols.length < 2e3) {
-      const next = new Date(cur);
-      next.setHours(next.getHours() + 1);
+    while (cur <= endDate && cols.length < 1e4) {
+      const next = new Date(cur.getTime() + stepMs);
       const colStart = dateToFractionalYear(cur);
       const colEnd = dateToFractionalYear(next);
       const h = cur.getHours();
-      const label = `${h}:00`;
-      const dayStr = `${cur.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
-      cols.push({
-        start: colStart,
-        end: colEnd,
-        label,
-        tierLabel: dayStr,
-        isTierStart: h === 0
-      });
+      const m = cur.getMinutes();
+      const hh = String(h).padStart(2, "0");
+      const mm = String(m).padStart(2, "0");
+      const label = stepMin >= 60 ? `${hh}:00` : `:${mm}`;
+      const dayLabel = cur.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      let tierLabel;
+      let isTierStart;
+      if (stepMin >= 60) {
+        tierLabel = dayLabel;
+        isTierStart = h === 0;
+      } else {
+        const isMidnight = h === 0 && m === 0;
+        tierLabel = isMidnight ? `${dayLabel} \xB7 ${hh}:00` : `${hh}:00`;
+        isTierStart = m === 0;
+      }
+      cols.push({ start: colStart, end: colEnd, label, tierLabel, isTierStart });
       cur = next;
     }
     return cols;
   },
   snapToUnit(year) {
     const d = fractionalYearToDate(year);
-    d.setMinutes(0, 0, 0);
+    d.setSeconds(0, 0);
+    d.setMinutes(Math.round(d.getMinutes() / 15) * 15);
     return dateToFractionalYear(d);
   }
 };
@@ -3444,53 +3555,6 @@ function fractionalYearToDate(fy) {
   return new Date(start + frac * (end - start));
 }
 function dateToFractionalYear(d) {
-  const year = d.getFullYear();
-  const start = new Date(year, 0, 1).getTime();
-  const end = new Date(year + 1, 0, 1).getTime();
-  return year + (d.getTime() - start) / (end - start);
-}
-registerScale(HourScale);
-
-// src/scale/scales/DayScale.ts
-var DAY_IN_YEARS = 1 / 365;
-var DayScale = {
-  id: "day",
-  label: "Day",
-  unitDurationYears: DAY_IN_YEARS,
-  supportsSubYear: true,
-  supportsBCE: false,
-  getColumnBoundaries(start, end) {
-    const cols = [];
-    const startYear = Math.floor(start);
-    const startFrac = start - startYear;
-    const startDayOfYear = Math.floor(startFrac * 365);
-    const startDate = new Date(startYear, 0, 1 + startDayOfYear);
-    const endYear = Math.ceil(end);
-    const endDate = new Date(endYear, 0, 1);
-    let cur = new Date(startDate);
-    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    while (cur <= endDate && cols.length < 3e3) {
-      const next = new Date(cur);
-      next.setDate(next.getDate() + 1);
-      const colStart = dateToFracYear(cur);
-      const colEnd = dateToFracYear(next);
-      const dayNum = cur.getDate();
-      const label = `${dayNum}`;
-      const tierLabel = `${months[cur.getMonth()]} ${cur.getFullYear()}`;
-      const isTierStart = dayNum === 1;
-      cols.push({ start: colStart, end: colEnd, label, tierLabel, isTierStart });
-      cur = next;
-    }
-    return cols;
-  },
-  snapToUnit(year) {
-    const y = Math.floor(year);
-    const frac = year - y;
-    const day = Math.round(frac * 365);
-    return y + day / 365;
-  }
-};
-function dateToFracYear(d) {
   const year = d.getFullYear();
   const start = new Date(year, 0, 1).getTime();
   const end = new Date(year + 1, 0, 1).getTime();
@@ -3519,8 +3583,8 @@ var WeekScale = {
     while (cur <= endDate && cols.length < 1e3) {
       const next = new Date(cur);
       next.setDate(next.getDate() + 7);
-      const colStart = dateToFracYear2(cur);
-      const colEnd = dateToFracYear2(next);
+      const colStart = dateToFracYear(cur);
+      const colEnd = dateToFracYear(next);
       const label = `${months[cur.getMonth()]} ${cur.getDate()}`;
       const tierLabel = `${months[cur.getMonth()]} ${cur.getFullYear()}`;
       const isTierStart = cur.getDate() <= 7;
@@ -3534,7 +3598,7 @@ var WeekScale = {
     const dow = d.getDay();
     const diff = dow === 0 ? -6 : 1 - dow;
     d.setDate(d.getDate() + diff);
-    return dateToFracYear2(d);
+    return dateToFracYear(d);
   }
 };
 function fractionalYearToDate2(fy) {
@@ -3544,7 +3608,7 @@ function fractionalYearToDate2(fy) {
   const end = new Date(year + 1, 0, 1).getTime();
   return new Date(start + frac * (end - start));
 }
-function dateToFracYear2(d) {
+function dateToFracYear(d) {
   const year = d.getFullYear();
   const start = new Date(year, 0, 1).getTime();
   const end = new Date(year + 1, 0, 1).getTime();
@@ -3792,6 +3856,8 @@ var SabidurianView = class extends import_obsidian6.BasesView {
     this.collapsedGroups = /* @__PURE__ */ new Set();
     // ── Lock state (prevents drag/resize/create) ──
     this._locked = false;
+    /** Set to true after the first successful render so initial-scroll logic only fires once. */
+    this._hasRendered = false;
     // ── Viewport culling (Phase 11) ──
     this.viewportCuller = null;
     /** All entries after layout (row >= 0), before viewport filtering. */
@@ -3811,7 +3877,7 @@ var SabidurianView = class extends import_obsidian6.BasesView {
     this.renderSkeleton();
   }
   onDataUpdated() {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C;
     const prevScrollLeft = (_b = (_a = this.timelineRenderer) == null ? void 0 : _a.element.scrollLeft) != null ? _b : 0;
     const prevScrollTop = (_d = (_c = this.timelineRenderer) == null ? void 0 : _c.element.scrollTop) != null ? _d : 0;
     (_e = this.dragManager) == null ? void 0 : _e.destroy();
@@ -3841,6 +3907,7 @@ var SabidurianView = class extends import_obsidian6.BasesView {
     if (this.rootEl) {
       this.rootEl.remove();
     }
+    this.scrollEl.querySelectorAll(":scope > .sabidurian-container").forEach((el) => el.remove());
     this.rootEl = this.scrollEl.createDiv({ cls: "sabidurian-container" });
     const entries = (_r = (_q = this.data) == null ? void 0 : _q.data) != null ? _r : [];
     if (entries.length === 0) {
@@ -3899,22 +3966,29 @@ var SabidurianView = class extends import_obsidian6.BasesView {
         8e3
       );
     }
-    const { viewStart, viewEnd, range } = this.computeViewBounds(sabidurianEntries);
+    const initialScroll = (_v = this.config.get("initialScroll")) != null ? _v : "today";
+    const { viewStart, viewEnd, range } = this.computeViewBounds(
+      sabidurianEntries,
+      initialScroll === "today"
+    );
     const containerWidth = this.rootEl.clientWidth || 800;
-    const savedScaleId = this.config.get("scaleId");
-    this.currentScale = savedScaleId && savedScaleId !== "auto" ? (_v = SCALES.find((s) => s.id === savedScaleId)) != null ? _v : autoSelectScale(range, containerWidth) : autoSelectScale(range, containerWidth);
+    let savedScaleId = this.config.get("scaleId");
+    if (savedScaleId === "hour") savedScaleId = "day";
+    this.currentScale = savedScaleId && savedScaleId !== "auto" ? (_w = SCALES.find((s) => s.id === savedScaleId)) != null ? _w : autoSelectScale(range, containerWidth) : autoSelectScale(range, containerWidth);
     const columns = this.currentScale.getColumnBoundaries(viewStart, viewEnd);
-    const minCanvasWidth = Math.max(containerWidth, columns.length * 80);
-    const canvasWidth = Math.max(containerWidth, minCanvasWidth);
+    const MAX_CANVAS_WIDTH = 32e3;
+    const minColPx = (_x = this.currentScale.minColumnPx) != null ? _x : 80;
+    const densityWidth = Math.min(MAX_CANVAS_WIDTH, columns.length * minColPx);
+    const canvasWidth = Math.max(containerWidth, densityWidth);
     this.axis.setView(viewStart, viewEnd, canvasWidth);
-    const configLocked = (_w = this.config.get("locked")) != null ? _w : false;
+    const configLocked = (_y = this.config.get("locked")) != null ? _y : false;
     const autoLock = this.plugin.settings.lockOnMobile && isTouchDevice();
     this._locked = configLocked || autoLock;
     this.renderControls(sabidurianEntries.length);
     const bodyContainerEl = this.rootEl.createDiv({ cls: "sabidurian-body-container" });
     const headerContainerEl = bodyContainerEl.createDiv({ cls: "sabidurian-header-container" });
     const isMobile = isMobileViewport();
-    const showTable = isMobile ? false : (_x = this.config.get("showTable")) != null ? _x : true;
+    const showTable = isMobile ? false : (_z = this.config.get("showTable")) != null ? _z : true;
     const savedTableWidth = this.config.get("tableWidth");
     const tableColumns = this.getTableColumns(startPropId, endPropId);
     if (showTable) {
@@ -3969,10 +4043,10 @@ var SabidurianView = class extends import_obsidian6.BasesView {
         this.highlightBar(idx);
       });
     }
-    const showToday = (_y = this.config.get("showToday")) != null ? _y : true;
+    const showToday = (_A = this.config.get("showToday")) != null ? _A : true;
     this.timelineRenderer = new TimelineRenderer(contentEl);
     this.timelineRenderer.render(columns, this.axis, canvasHeight, showToday);
-    this._showArrows = (_z = this.config.get("showArrows")) != null ? _z : true;
+    this._showArrows = (_B = this.config.get("showArrows")) != null ? _B : true;
     this._isGrouped = isGrouped;
     this.allVisibleEntries = visibleEntries;
     this.cullingActive = visibleEntries.length > CULLING_THRESHOLD;
@@ -3997,7 +4071,7 @@ var SabidurianView = class extends import_obsidian6.BasesView {
       this.plugin.settings.barPropertyMinWidth,
       this.plugin.settings.showBarProperties
     );
-    const focusTagRaw = ((_A = this.config.get("focusTag")) == null ? void 0 : _A.trim()) || null;
+    const focusTagRaw = ((_C = this.config.get("focusTag")) == null ? void 0 : _C.trim()) || null;
     this.barRenderer.setFocusTag(focusTagRaw ? focusTagRaw.replace(/^#/, "") : null);
     if (isGrouped) {
       this.groupHeaderRenderer = new GroupHeaderRenderer(
@@ -4043,6 +4117,43 @@ var SabidurianView = class extends import_obsidian6.BasesView {
           this.renderVisibleBars();
         }
       });
+    } else if (!this._hasRendered) {
+      requestAnimationFrame(() => this.applyInitialScroll());
+    }
+    this._hasRendered = true;
+  }
+  /**
+   * Apply the user's configured initial-scroll position on first render.
+   * Choices: 'today' (default), 'start', 'end'. If today is out of the
+   * computed view bounds, falls back to 'start'.
+   */
+  applyInitialScroll() {
+    var _a, _b;
+    if (!this.timelineRenderer) return;
+    const mode = (_a = this.config.get("initialScroll")) != null ? _a : "today";
+    const body = this.timelineRenderer.element;
+    if (mode === "start") {
+      body.scrollLeft = 0;
+    } else if (mode === "end") {
+      body.scrollLeft = Math.max(0, body.scrollWidth - body.clientWidth);
+    } else {
+      const now = /* @__PURE__ */ new Date();
+      const y = now.getFullYear();
+      const start = new Date(y, 0, 1).getTime();
+      const end = new Date(y + 1, 0, 1).getTime();
+      const todayFrac = y + (now.getTime() - start) / (end - start);
+      if (todayFrac < this.axis.viewStart || todayFrac > this.axis.viewEnd) {
+        body.scrollLeft = 0;
+      } else {
+        this.timelineRenderer.scrollToYear(this.axis, todayFrac);
+      }
+    }
+    (_b = this.headerRenderer) == null ? void 0 : _b.setScrollLeft(body.scrollLeft);
+    if (this.sideTableRenderer) {
+      this.sideTableRenderer.scrollBody.scrollTop = body.scrollTop;
+    }
+    if (this.cullingActive) {
+      this.renderVisibleBars();
     }
   }
   /**
@@ -4283,8 +4394,8 @@ var SabidurianView = class extends import_obsidian6.BasesView {
       });
       if (!this._locked) {
         this.touchManager.setDragCompleteCallback(async (entry, newStart, newEnd) => {
-          const startDateStr = this.yearToDateStr(newStart);
-          const endDateStr = this.yearToDateStr(newEnd);
+          const startDateStr = this.yearToDateStr(newStart, this.entryWritePrecision(entry, "start"));
+          const endDateStr = this.yearToDateStr(newEnd, this.entryWritePrecision(entry, "end"));
           await this.plugin.app.fileManager.processFrontMatter(entry.file, (fm) => {
             fm[this._startPropName] = startDateStr;
             if (!entry.isPoint) {
@@ -4361,6 +4472,7 @@ var SabidurianView = class extends import_obsidian6.BasesView {
     }
   }
   parseEntries(entries, startPropId, endPropId, colorPropId, depPropName, enableBCE = true, earliestStartPropId, latestEndPropId) {
+    var _a;
     const result = [];
     for (const entry of entries) {
       const startVal = startPropId ? entry.getValue(startPropId) : null;
@@ -4417,7 +4529,8 @@ var SabidurianView = class extends import_obsidian6.BasesView {
         isOngoing = true;
         endYear = currentYear;
       }
-      const isPoint = !isOngoing && (!endDate || Math.abs(endYear - startYear) < 1e-3);
+      const pointThreshold = ((_a = this.currentScale) == null ? void 0 : _a.id) === "day" ? 0 : 1e-3;
+      const isPoint = !isOngoing && (!endDate || Math.abs(endYear - startYear) <= pointThreshold);
       const colorVal = colorPropId ? entry.getValue(colorPropId) : null;
       const colorStr = colorVal ? colorVal.toString() : "";
       const color = getColorForValue(colorStr);
@@ -4525,7 +4638,7 @@ var SabidurianView = class extends import_obsidian6.BasesView {
       );
     }
   }
-  computeViewBounds(entries) {
+  computeViewBounds(entries, includeToday = false) {
     var _a, _b;
     let minYear = Infinity;
     let maxYear = -Infinity;
@@ -4536,6 +4649,20 @@ var SabidurianView = class extends import_obsidian6.BasesView {
       if (e.startYear > maxYear) maxYear = e.startYear;
       if (effEnd < minYear) minYear = effEnd;
       if (effEnd > maxYear) maxYear = effEnd;
+    }
+    if (includeToday && minYear !== Infinity) {
+      const now = /* @__PURE__ */ new Date();
+      const y = now.getFullYear();
+      const startMs = new Date(y, 0, 1).getTime();
+      const endMs = new Date(y + 1, 0, 1).getTime();
+      const todayFrac = y + (now.getTime() - startMs) / (endMs - startMs);
+      const dataRange = maxYear - minYear || 1;
+      const nearWindow = Math.max(dataRange, 1);
+      if (todayFrac < minYear && minYear - todayFrac <= nearWindow) {
+        minYear = todayFrac;
+      } else if (todayFrac > maxYear && todayFrac - maxYear <= nearWindow) {
+        maxYear = todayFrac;
+      }
     }
     const range = maxYear - minYear || 1;
     const padding = range * VIEW_PADDING_RATIO;
@@ -4620,6 +4747,7 @@ var SabidurianView = class extends import_obsidian6.BasesView {
     });
   }
   renderSkeleton() {
+    this.scrollEl.querySelectorAll(":scope > .sabidurian-container").forEach((el) => el.remove());
     this.rootEl = this.scrollEl.createDiv({ cls: "sabidurian-container" });
     const skeleton = this.rootEl.createDiv({ cls: "sabidurian-skeleton" });
     const widths = [65, 40, 80, 55, 45];
@@ -4639,22 +4767,26 @@ var SabidurianView = class extends import_obsidian6.BasesView {
     });
   }
   /**
-   * Convert a fractional year to a YAML-friendly date string.
-   * Mirrors DragManager.yearToDateString for the create callback.
+   * Convert a fractional year to a YAML-friendly date string at the given
+   * precision. Precision defaults to the current scale's write precision
+   * (or 'day' if none is set).
    */
-  yearToDateStr(fractionalYear) {
-    if (fractionalYear < 1) {
-      return Math.round(fractionalYear);
-    }
-    const year = Math.floor(fractionalYear);
-    const frac = fractionalYear - year;
-    const yStr = String(year).padStart(4, "0");
-    if (frac < 1e-3) return yStr;
-    const dayOfYear = Math.round(frac * 365);
-    const date = new Date(Date.UTC(2e3, 0, 1 + dayOfYear));
-    const m = String(date.getUTCMonth() + 1).padStart(2, "0");
-    const d = String(date.getUTCDate()).padStart(2, "0");
-    return `${yStr}-${m}-${d}`;
+  yearToDateStr(fractionalYear, precision) {
+    var _a, _b;
+    const p = (_b = precision != null ? precision : (_a = this.currentScale) == null ? void 0 : _a.writePrecision) != null ? _b : "day";
+    return yearToYAMLString(fractionalYear, p);
+  }
+  /**
+   * Precision to use when writing back drag-modified dates for a specific
+   * entry: the finer of the original date's precision and the current scale's
+   * write precision.
+   */
+  entryWritePrecision(entry, which) {
+    var _a, _b;
+    const date = which === "start" ? entry.start : entry.end;
+    const origPrecision = date ? getDatePrecision(date) : "day";
+    const scalePrecision = (_b = (_a = this.currentScale) == null ? void 0 : _a.writePrecision) != null ? _b : "day";
+    return maxPrecision(origPrecision, scalePrecision);
   }
   onunload() {
     var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
@@ -4795,6 +4927,7 @@ var SequenceView = class extends import_obsidian7.BasesView {
     const prevScrollTop = (_d = (_c = this.timelineRenderer) == null ? void 0 : _c.element.scrollTop) != null ? _d : 0;
     this.destroyManagers();
     if (this.rootEl) this.rootEl.remove();
+    this.scrollEl.querySelectorAll(":scope > .sabidurian-container").forEach((el) => el.remove());
     this.rootEl = this.scrollEl.createDiv({ cls: "sabidurian-container sabidurian-sequence-container" });
     const entries = (_f = (_e = this.data) == null ? void 0 : _e.data) != null ? _f : [];
     if (entries.length === 0) {
@@ -5432,6 +5565,7 @@ var SequenceView = class extends import_obsidian7.BasesView {
     });
   }
   renderSkeleton() {
+    this.scrollEl.querySelectorAll(":scope > .sabidurian-container").forEach((el) => el.remove());
     this.rootEl = this.scrollEl.createDiv({ cls: "sabidurian-container sabidurian-sequence-container" });
     const skeleton = this.rootEl.createDiv({ cls: "sabidurian-skeleton" });
     const widths = [65, 40, 80, 55, 45];
@@ -5551,6 +5685,18 @@ function getViewOptions(config) {
       displayName: "Default scale",
       default: "auto",
       options: scaleOptions
+    },
+    // ── Initial scroll position (on view open) ──
+    {
+      type: "dropdown",
+      key: "initialScroll",
+      displayName: "Open view at",
+      default: "today",
+      options: {
+        today: "Today",
+        start: "Start of data",
+        end: "End of data"
+      }
     },
     // ── Focus filter ──
     {

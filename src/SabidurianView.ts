@@ -14,6 +14,10 @@ import {
   parseSabidurianDate,
   sabidurianDateToYear,
   formatSabidurianDate,
+  getDatePrecision,
+  maxPrecision,
+  yearToYAMLString,
+  type DatePrecision,
   type SabidurianDate,
 } from './utils/dateUtils';
 import { getColorForValue, resetColorCache } from './utils/colorUtils';
@@ -82,6 +86,9 @@ export class SabidurianView extends BasesView {
   // ── Lock state (prevents drag/resize/create) ──
   private _locked = false;
 
+  /** Set to true after the first successful render so initial-scroll logic only fires once. */
+  private _hasRendered = false;
+
   // ── Viewport culling (Phase 11) ──
   private viewportCuller: ViewportCuller | null = null;
   /** All entries after layout (row >= 0), before viewport filtering. */
@@ -138,6 +145,12 @@ export class SabidurianView extends BasesView {
     if (this.rootEl) {
       this.rootEl.remove();
     }
+    // Defensive cleanup: if Obsidian reuses scrollEl across view-type
+    // switches or re-entrancy, stale .sabidurian-container siblings can
+    // accumulate. Remove any before creating the fresh root.
+    this.scrollEl
+      .querySelectorAll(':scope > .sabidurian-container')
+      .forEach((el) => el.remove());
     this.rootEl = this.scrollEl.createDiv({ cls: 'sabidurian-container' });
 
     const entries = this.data?.data ?? [];
@@ -219,12 +232,22 @@ export class SabidurianView extends BasesView {
       );
     }
 
-    // Compute view bounds
-    const { viewStart, viewEnd, range } = this.computeViewBounds(sabidurianEntries);
+    // Compute view bounds from data. When the initial-scroll setting is
+    // 'today', extend bounds to include today so the marker and the scroll
+    // target are both visible — but only if today is within the padded range
+    // already or within one "data range" of it, to avoid huge empty gaps on
+    // historical Bases.
+    const initialScroll = (this.config.get('initialScroll') as string | undefined) ?? 'today';
+    const { viewStart, viewEnd, range } = this.computeViewBounds(
+      sabidurianEntries,
+      initialScroll === 'today',
+    );
 
-    // Auto-select scale first (based on range), then compute canvas width
+    // Auto-select scale first (based on range), then compute canvas width.
+    // Legacy 'hour' scale has been folded into 'day'.
     const containerWidth = this.rootEl.clientWidth || 800;
-    const savedScaleId = this.config.get('scaleId') as string | undefined;
+    let savedScaleId = this.config.get('scaleId') as string | undefined;
+    if (savedScaleId === 'hour') savedScaleId = 'day';
     this.currentScale = (savedScaleId && savedScaleId !== 'auto')
       ? (SCALES.find(s => s.id === savedScaleId) ?? autoSelectScale(range, containerWidth))
       : autoSelectScale(range, containerWidth);
@@ -232,10 +255,14 @@ export class SabidurianView extends BasesView {
     // Generate columns for the selected scale (needed before canvas width calc)
     const columns = this.currentScale.getColumnBoundaries(viewStart, viewEnd);
 
-    // Canvas width: ensure each column gets at least ~80px so switching
-    // scales always produces a visible difference in bar sizing.
-    const minCanvasWidth = Math.max(containerWidth, columns.length * 80);
-    const canvasWidth = Math.max(containerWidth, minCanvasWidth);
+    // Canvas width: ensure each column gets at least ~Npx so switching
+    // scales always produces a visible difference in bar sizing. Capped at
+    // MAX_CANVAS_WIDTH to avoid Chromium/Skia SVG rendering artifacts on
+    // very wide canvases (seen at > 32K px).
+    const MAX_CANVAS_WIDTH = 32000;
+    const minColPx = this.currentScale.minColumnPx ?? 80;
+    const densityWidth = Math.min(MAX_CANVAS_WIDTH, columns.length * minColPx);
+    const canvasWidth = Math.max(containerWidth, densityWidth);
     this.axis.setView(viewStart, viewEnd, canvasWidth);
     // Lock state: per-view config OR auto-lock on mobile via plugin setting
     const configLocked = this.config.get('locked') as boolean ?? false;
@@ -432,6 +459,46 @@ export class SabidurianView extends BasesView {
           this.renderVisibleBars();
         }
       });
+    } else if (!this._hasRendered) {
+      // First render: apply the configured initial-scroll behavior.
+      requestAnimationFrame(() => this.applyInitialScroll());
+    }
+    this._hasRendered = true;
+  }
+
+  /**
+   * Apply the user's configured initial-scroll position on first render.
+   * Choices: 'today' (default), 'start', 'end'. If today is out of the
+   * computed view bounds, falls back to 'start'.
+   */
+  private applyInitialScroll(): void {
+    if (!this.timelineRenderer) return;
+    const mode = (this.config.get('initialScroll') as string | undefined) ?? 'today';
+    const body = this.timelineRenderer.element;
+
+    if (mode === 'start') {
+      body.scrollLeft = 0;
+    } else if (mode === 'end') {
+      body.scrollLeft = Math.max(0, body.scrollWidth - body.clientWidth);
+    } else {
+      // 'today'
+      const now = new Date();
+      const y = now.getFullYear();
+      const start = new Date(y, 0, 1).getTime();
+      const end = new Date(y + 1, 0, 1).getTime();
+      const todayFrac = y + (now.getTime() - start) / (end - start);
+      if (todayFrac < this.axis.viewStart || todayFrac > this.axis.viewEnd) {
+        body.scrollLeft = 0;
+      } else {
+        this.timelineRenderer.scrollToYear(this.axis, todayFrac);
+      }
+    }
+    this.headerRenderer?.setScrollLeft(body.scrollLeft);
+    if (this.sideTableRenderer) {
+      this.sideTableRenderer.scrollBody.scrollTop = body.scrollTop;
+    }
+    if (this.cullingActive) {
+      this.renderVisibleBars();
     }
   }
 
@@ -704,8 +771,8 @@ export class SabidurianView extends BasesView {
       // Drag & create callbacks only when unlocked
       if (!this._locked) {
         this.touchManager.setDragCompleteCallback(async (entry, newStart, newEnd) => {
-          const startDateStr = this.yearToDateStr(newStart);
-          const endDateStr = this.yearToDateStr(newEnd);
+          const startDateStr = this.yearToDateStr(newStart, this.entryWritePrecision(entry, 'start'));
+          const endDateStr = this.yearToDateStr(newEnd, this.entryWritePrecision(entry, 'end'));
           await this.plugin.app.fileManager.processFrontMatter(entry.file, (fm) => {
             fm[this._startPropName] = startDateStr;
             if (!entry.isPoint) {
@@ -883,7 +950,13 @@ export class SabidurianView extends BasesView {
         endYear = currentYear;
       }
 
-      const isPoint = !isOngoing && (!endDate || Math.abs(endYear - startYear) < 0.001);
+      // Point detection threshold — below this duration (in years) the entry
+      // renders as a diamond marker instead of a bar. Day scale always renders
+      // bars for events with an end date, so sub-day durations are visible.
+      // Coarser scales fall back to the legacy ~8-hour threshold since sub-day
+      // bars would be imperceptibly thin.
+      const pointThreshold = this.currentScale?.id === 'day' ? 0 : 0.001;
+      const isPoint = !isOngoing && (!endDate || Math.abs(endYear - startYear) <= pointThreshold);
 
       // Color
       const colorVal = colorPropId ? entry.getValue(colorPropId) : null;
@@ -1018,7 +1091,10 @@ export class SabidurianView extends BasesView {
     }
   }
 
-  private computeViewBounds(entries: SabidurianEntry[]): {
+  private computeViewBounds(
+    entries: SabidurianEntry[],
+    includeToday = false,
+  ): {
     viewStart: number;
     viewEnd: number;
     range: number;
@@ -1033,6 +1109,24 @@ export class SabidurianView extends BasesView {
       if (e.startYear > maxYear) maxYear = e.startYear;
       if (effEnd < minYear) minYear = effEnd;
       if (effEnd > maxYear) maxYear = effEnd;
+    }
+
+    if (includeToday && minYear !== Infinity) {
+      const now = new Date();
+      const y = now.getFullYear();
+      const startMs = new Date(y, 0, 1).getTime();
+      const endMs = new Date(y + 1, 0, 1).getTime();
+      const todayFrac = y + (now.getTime() - startMs) / (endMs - startMs);
+      // Only extend if today is within one data-range beyond the current
+      // bounds; otherwise leave bounds alone so historical Bases don't
+      // balloon into thousands of empty years.
+      const dataRange = (maxYear - minYear) || 1;
+      const nearWindow = Math.max(dataRange, 1);
+      if (todayFrac < minYear && minYear - todayFrac <= nearWindow) {
+        minYear = todayFrac;
+      } else if (todayFrac > maxYear && todayFrac - maxYear <= nearWindow) {
+        maxYear = todayFrac;
+      }
     }
 
     const range = maxYear - minYear || 1;
@@ -1132,6 +1226,10 @@ export class SabidurianView extends BasesView {
   }
 
   private renderSkeleton(): void {
+    // Defensive: clear any stale siblings before creating the skeleton.
+    this.scrollEl
+      .querySelectorAll(':scope > .sabidurian-container')
+      .forEach((el) => el.remove());
     this.rootEl = this.scrollEl.createDiv({ cls: 'sabidurian-container' });
     const skeleton = this.rootEl.createDiv({ cls: 'sabidurian-skeleton' });
     // 5 shimmer bars at staggered widths
@@ -1155,26 +1253,31 @@ export class SabidurianView extends BasesView {
   }
 
   /**
-   * Convert a fractional year to a YAML-friendly date string.
-   * Mirrors DragManager.yearToDateString for the create callback.
+   * Convert a fractional year to a YAML-friendly date string at the given
+   * precision. Precision defaults to the current scale's write precision
+   * (or 'day' if none is set).
    */
-  private yearToDateStr(fractionalYear: number): string | number {
-    if (fractionalYear < 1) {
-      // BCE: return plain number so YAML writes e.g. -500 (not '"-500"')
-      return Math.round(fractionalYear);
-    }
-    const year = Math.floor(fractionalYear);
-    const frac = fractionalYear - year;
-    const yStr = String(year).padStart(4, '0');
-    if (frac < 0.001) return yStr;
+  private yearToDateStr(
+    fractionalYear: number,
+    precision?: DatePrecision,
+  ): string | number {
+    const p = precision ?? this.currentScale?.writePrecision ?? 'day';
+    return yearToYAMLString(fractionalYear, p);
+  }
 
-    // Convert fractional year to month/day
-    // Use Date.UTC to avoid JS treating years 0-99 as 1900-1999
-    const dayOfYear = Math.round(frac * 365);
-    const date = new Date(Date.UTC(2000, 0, 1 + dayOfYear));
-    const m = String(date.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(date.getUTCDate()).padStart(2, '0');
-    return `${yStr}-${m}-${d}`;
+  /**
+   * Precision to use when writing back drag-modified dates for a specific
+   * entry: the finer of the original date's precision and the current scale's
+   * write precision.
+   */
+  private entryWritePrecision(
+    entry: SabidurianEntry,
+    which: 'start' | 'end',
+  ): DatePrecision {
+    const date = which === 'start' ? entry.start : entry.end;
+    const origPrecision: DatePrecision = date ? getDatePrecision(date) : 'day';
+    const scalePrecision: DatePrecision = this.currentScale?.writePrecision ?? 'day';
+    return maxPrecision(origPrecision, scalePrecision);
   }
 
   onunload(): void {

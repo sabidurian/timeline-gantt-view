@@ -18,6 +18,13 @@ import type { SabidurianEntry } from '../model/SabidurianEntry';
 import { NumericAxis } from '../scale/NumericAxis';
 import { TimeScale } from '../scale/TimeScale';
 import { BAR_HEIGHT } from '../model/LayoutEngine';
+import {
+  getDatePrecision,
+  maxPrecision,
+  yearToYAMLString,
+  type DatePrecision,
+  type SabidurianDate,
+} from '../utils/dateUtils';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const LONG_PRESS_MS = 500;
@@ -538,8 +545,11 @@ export class TouchManager {
     const newEnd = (this.ctx as any)._newEnd as number | undefined;
     if (newStart == null) return;
 
-    const startStr = this.yearToDateString(newStart);
-    const endStr = newEnd != null ? this.yearToDateString(newEnd) : '';
+    const entry = this.ctx.entry;
+    const sp = entry ? this.precisionForEntry(entry, 'start') : this.scaleWritePrecision();
+    const ep = entry ? this.precisionForEntry(entry, 'end') : this.scaleWritePrecision();
+    const startStr = this.yearToDateString(newStart, sp);
+    const endStr = newEnd != null ? this.yearToDateString(newEnd, ep) : '';
     this.ctx.dateLabelEl.setText(endStr ? `${startStr} → ${endStr}` : startStr);
     this.ctx.dateLabelEl.style.display = 'block';
     // Position above the finger
@@ -547,17 +557,24 @@ export class TouchManager {
     this.ctx.dateLabelEl.style.top = `${touch.clientY - 50}px`;
   }
 
-  private yearToDateString(fractionalYear: number): string {
-    if (fractionalYear < 1) return `${Math.round(fractionalYear)}`;
-    const year = Math.floor(fractionalYear);
-    const frac = fractionalYear - year;
-    const yStr = String(year).padStart(4, '0');
-    if (frac < 0.001) return yStr;
-    const dayOfYear = Math.round(frac * 365);
-    const date = new Date(Date.UTC(2000, 0, 1 + dayOfYear));
-    const m = String(date.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(date.getUTCDate()).padStart(2, '0');
-    return `${yStr}-${m}-${d}`;
+  private yearToDateString(
+    fractionalYear: number,
+    precision: DatePrecision = 'day',
+  ): string {
+    return String(yearToYAMLString(fractionalYear, precision));
+  }
+
+  private scaleWritePrecision(): DatePrecision {
+    return this.scale.writePrecision ?? 'day';
+  }
+
+  private precisionForEntry(
+    entry: SabidurianEntry,
+    which: 'start' | 'end',
+  ): DatePrecision {
+    const date: SabidurianDate | null | undefined = which === 'start' ? entry.start : entry.end;
+    const origPrecision: DatePrecision = date ? getDatePrecision(date) : 'day';
+    return maxPrecision(origPrecision, this.scaleWritePrecision());
   }
 
   private freshContext(): TouchContext {
